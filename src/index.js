@@ -167,13 +167,37 @@ function seedDemoData() {
   }
 }
 
-// ─── Means Test: Anthropic Extraction ────────────────────────
+// ─── Means Test: Anthropic Extraction (via LiteLLM proxy + local redaction) ──
 const Anthropic = require('@anthropic-ai/sdk').default;
+const { redactForExtraction, cleanup: redactionCleanup } = require('./main/redaction');
 
 function getAnthropicClient() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is not set');
-  return new Anthropic({ apiKey });
+  // If LITELLM_BASE_URL is set, route through the proxy for audit logging
+  // and defense-in-depth PII masking. Otherwise call Anthropic directly.
+  const baseURL = process.env.LITELLM_BASE_URL || process.env.ANTHROPIC_BASE_URL;
+  const opts = { apiKey };
+  if (baseURL) opts.baseURL = baseURL;
+  return new Anthropic(opts);
+}
+
+// Look up debtor context for a document's case — used to detect debtor-specific PII
+function getDebtorContextForDoc(docId) {
+  const row = db.prepare(`
+    SELECT d.first_name, d.last_name, d.address_street, d.address_city
+    FROM documents doc
+    JOIN debtors d ON d.case_id = doc.case_id AND d.is_joint = 0
+    WHERE doc.id = ?
+    LIMIT 1
+  `).get(docId);
+  if (!row) return {};
+  return {
+    firstName: row.first_name,
+    lastName: row.last_name,
+    street: row.address_street,
+    city: row.address_city,
+  };
 }
 
 function getExtractionPrompt(docCategory) {
@@ -269,35 +293,104 @@ Extract all financial data you can find. Categorize the document and return stru
   }
 }
 
-async function extractWithClaude(filePath, docCategory) {
+async function extractWithClaude(filePath, docCategory, debtorContext = {}) {
   const client = getAnthropicClient();
-  const fileBuffer = fs.readFileSync(filePath);
-  const base64Data = fileBuffer.toString('base64');
-  const ext = path.extname(filePath).toLowerCase();
 
-  let mediaType = 'application/pdf';
-  if (['.png'].includes(ext)) mediaType = 'image/png';
-  else if (['.jpg', '.jpeg'].includes(ext)) mediaType = 'image/jpeg';
+  // Step 1: Local OCR + visual PII redaction.
+  // Produces a temporary file where SSNs, account numbers, DOBs, phones,
+  // emails, debtor names, and addresses are blacked out.
+  const { redactedPath, detections } = await redactForExtraction(filePath, debtorContext);
 
-  const isPdf = ext === '.pdf';
+  if (detections.length > 0) {
+    console.log(`[redaction] ${detections.length} PII region(s) redacted before API call:`,
+      detections.map(d => d.type).join(', '));
+  }
 
-  const content = [
-    isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: base64Data } }
-      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Data } },
-    { type: 'text', text: getExtractionPrompt(docCategory) },
-  ];
+  try {
+    const fileBuffer = fs.readFileSync(redactedPath);
+    const base64Data = fileBuffer.toString('base64');
+    const ext = path.extname(redactedPath).toLowerCase();
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 4096,
-    messages: [{ role: 'user', content }],
-  });
+    let mediaType = 'application/pdf';
+    if (ext === '.png') mediaType = 'image/png';
+    else if (['.jpg', '.jpeg'].includes(ext)) mediaType = 'image/jpeg';
 
-  const text = response.content.find(b => b.type === 'text')?.text || '{}';
-  // Strip markdown fences if present
-  const cleaned = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
-  return JSON.parse(cleaned);
+    const isPdf = ext === '.pdf';
+
+    const content = [
+      isPdf
+        ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: base64Data } }
+        : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Data } },
+      { type: 'text', text: getExtractionPrompt(docCategory) },
+    ];
+
+    const response = await client.messages.create({
+      // When going through LiteLLM, this maps to the "tabula-extract" model in config.yaml
+      model: process.env.LITELLM_BASE_URL ? 'tabula-extract' : 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content }],
+    });
+
+    const text = response.content.find(b => b.type === 'text')?.text || '{}';
+    const cleaned = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+    const parsed = JSON.parse(cleaned);
+    parsed._redactionCount = detections.length;
+    return parsed;
+  } finally {
+    // Always wipe the temp redacted file, even on error
+    redactionCleanup(redactedPath);
+  }
+}
+
+// ─── Auto-populate case data from extraction ─────────────────
+function populateCaseFromExtraction(caseId, docType, extracted) {
+  const { v4: uuid } = require('uuid');
+
+  if (docType === 'pay_stub' || extracted.type === 'paystub') {
+    // Convert gross pay to monthly based on frequency
+    const freq = (extracted.payFrequency || 'biweekly').toLowerCase();
+    const multipliers = { weekly: 4.33, biweekly: 2.167, semimonthly: 2, monthly: 1, annual: 1/12 };
+    const mult = multipliers[freq] || 1;
+    const grossMonthly = (extracted.grossPay || 0) * mult;
+    const netMonthly = (extracted.netPay || 0) * mult;
+
+    db.prepare('INSERT INTO income (id, case_id, source, employer_name, gross_monthly, net_monthly, pay_frequency) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      uuid(), caseId, 'Employment', extracted.employer || 'Unknown Employer',
+      Math.round(grossMonthly * 100) / 100, Math.round(netMonthly * 100) / 100, freq
+    );
+  }
+
+  if (docType === 'bank_statement' || extracted.type === 'bank_statement') {
+    const expenses = extracted.monthlyExpenses || {};
+    for (const [category, amount] of Object.entries(expenses)) {
+      if (amount && amount > 0) {
+        db.prepare('INSERT INTO expenses (id, case_id, category, description, monthly_amount) VALUES (?, ?, ?, ?, ?)').run(
+          uuid(), caseId, category, `From ${extracted.bank || 'bank'} statement`, amount
+        );
+      }
+    }
+  }
+
+  if (docType === 'credit_report' || extracted.type === 'credit_report') {
+    const accounts = extracted.accounts || [];
+    for (const acct of accounts) {
+      // Infer schedule from account type
+      let schedule = 'F'; // default nonpriority unsecured
+      let debtType = 'other';
+      const type = (acct.type || '').toLowerCase();
+      if (type.includes('auto') || type.includes('car')) { schedule = 'D'; debtType = 'auto_loan'; }
+      else if (type.includes('mortgage') || type.includes('home')) { schedule = 'D'; debtType = 'mortgage'; }
+      else if (type.includes('student')) { schedule = 'E'; debtType = 'student_loan'; }
+      else if (type.includes('credit card')) { debtType = 'credit_card'; }
+      else if (type.includes('store')) { debtType = 'credit_card'; }
+      else if (type.includes('purchased') || type.includes('collection')) { debtType = 'collections'; }
+
+      db.prepare('INSERT INTO creditors (id, case_id, name, account_number, debt_type, schedule, amount_claimed, is_disputed, is_contingent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+        uuid(), caseId, acct.creditor || 'Unknown', acct.accountNum || '',
+        debtType, schedule, acct.balance || 0, 0, 0
+      );
+    }
+  }
 }
 
 // ─── IPC Handlers ─────────────────────────────────────────────
@@ -374,6 +467,24 @@ function registerIPC() {
     return { success: true };
   });
 
+  // Debtors
+  ipcMain.handle('debtors:upsert', (_, caseId, debtor) => {
+    const { v4: uuid } = require('uuid');
+    const id = debtor.id || uuid();
+    db.prepare(`INSERT OR REPLACE INTO debtors (id, case_id, is_joint, first_name, last_name, ssn, dob, address_street, address_city, address_state, address_zip, phone, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, caseId, debtor.isJoint ? 1 : 0,
+      debtor.firstName || '', debtor.lastName || '', debtor.ssn || '', debtor.dob || '',
+      debtor.street || '', debtor.city || '', debtor.state || '', debtor.zip || '',
+      debtor.phone || '', debtor.email || ''
+    );
+    return { id };
+  });
+
+  ipcMain.handle('debtors:delete', (_, id) => {
+    db.prepare('DELETE FROM debtors WHERE id = ? AND is_joint = 1').run(id);
+    return { success: true };
+  });
+
   // Creditors
   ipcMain.handle('creditors:list', (_, caseId) => {
     return db.prepare('SELECT * FROM creditors WHERE case_id = ? ORDER BY schedule, name').all(caseId);
@@ -399,6 +510,11 @@ function registerIPC() {
     return { id };
   });
 
+  ipcMain.handle('income:delete', (_, id) => {
+    db.prepare('DELETE FROM income WHERE id = ?').run(id);
+    return { success: true };
+  });
+
   // Expenses
   ipcMain.handle('expenses:upsert', (_, caseId, exp) => {
     const { v4: uuid } = require('uuid');
@@ -407,6 +523,11 @@ function registerIPC() {
       id, caseId, exp.category, exp.description || '', exp.monthlyAmount || 0
     );
     return { id };
+  });
+
+  ipcMain.handle('expenses:delete', (_, id) => {
+    db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
+    return { success: true };
   });
 
   // Assets
@@ -446,11 +567,35 @@ function registerIPC() {
     return db.prepare('SELECT * FROM documents WHERE case_id = ? ORDER BY uploaded_at DESC').all(caseId);
   });
 
-  ipcMain.handle('documents:extract', (_, docId) => {
+  ipcMain.handle('documents:extract', async (_, docId) => {
     const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(docId);
     if (!doc) return null;
-    const extracted = mockExtract(doc.doc_type, doc.filename);
+
+    const categoryMap = {
+      'pay_stub': 'paystub',
+      'tax_return': 'tax_return',
+      'bank_statement': 'bank_statement',
+      'credit_report': 'other',
+      'other': 'other',
+    };
+    const category = categoryMap[doc.doc_type] || 'other';
+
+    const debtorContext = getDebtorContextForDoc(docId);
+
+    let extracted;
+    try {
+      extracted = await extractWithClaude(doc.file_path, category, debtorContext);
+    } catch (err) {
+      console.error('Claude extraction failed, using mock:', err.message);
+      extracted = mockExtract(doc.doc_type, doc.filename);
+      extracted._mock = true;
+    }
+
     db.prepare('UPDATE documents SET extracted_data = ? WHERE id = ?').run(JSON.stringify(extracted), docId);
+
+    // Auto-populate case financial data from extraction
+    populateCaseFromExtraction(doc.case_id, doc.doc_type, extracted);
+
     return extracted;
   });
 
@@ -487,9 +632,11 @@ function registerIPC() {
     }));
   });
 
-  // Extract data from a single file using Claude
+  // Extract data from a single file using Claude (standalone means test, no case context)
   ipcMain.handle('means-test:extract', async (_, filePath, docCategory) => {
-    return extractWithClaude(filePath, docCategory);
+    // Standalone means test: no debtor context available, so debtor-specific PII
+    // (names, addresses) won't be redacted — only pattern-based PII (SSN, account, etc.)
+    return extractWithClaude(filePath, docCategory, {});
   });
 
   // Check if API key is configured
@@ -632,4 +779,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', async () => {
+  try {
+    const { shutdown } = require('./main/redaction');
+    await shutdown();
+  } catch {}
 });
