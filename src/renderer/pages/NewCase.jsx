@@ -66,7 +66,7 @@ export default function NewCase({ navigate }) {
           zip: form.zip,
         },
       });
-      navigate(`/cases/${result.id}`);
+      navigate(`/cases/${result.id}/documents`);
     } catch (err) {
       console.error('Failed to create case:', err);
       setSaving(false);

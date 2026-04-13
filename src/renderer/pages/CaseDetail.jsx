@@ -13,14 +13,15 @@ const STATUS_LABELS = {
 const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'documents', label: 'Documents' },
+  { key: 'assets', label: 'Assets' },
   { key: 'creditors', label: 'Creditors' },
   { key: 'means-test', label: 'Means Test' },
   { key: 'review', label: 'Review' },
 ];
 
-export default function CaseDetail({ caseId, navigate }) {
+export default function CaseDetail({ caseId, initialTab, navigate }) {
   const [caseData, setCaseData] = useState(null);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(initialTab || 'overview');
   const [loading, setLoading] = useState(true);
 
   const loadCase = useCallback(async () => {
@@ -126,6 +127,9 @@ export default function CaseDetail({ caseId, navigate }) {
             {tab.key === 'documents' && caseData.documents?.length > 0 && (
               <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.documents.length}</span>
             )}
+            {tab.key === 'assets' && caseData.assets?.length > 0 && (
+              <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.assets.length}</span>
+            )}
             {tab.key === 'review' && caseData.flags?.filter(f => !f.resolved).length > 0 && (
               <span style={{ marginLeft: 6, color: 'var(--accent)' }}>
                 {caseData.flags.filter(f => !f.resolved).length}
@@ -138,6 +142,7 @@ export default function CaseDetail({ caseId, navigate }) {
       {/* Tab Content */}
       {activeTab === 'overview' && <OverviewTab caseData={caseData} debtor={debtor} caseId={caseId} onRefresh={loadCase} />}
       {activeTab === 'documents' && <DocumentsTab caseData={caseData} onUpload={handleUploadDocuments} onExtract={handleExtract} />}
+      {activeTab === 'assets' && <AssetsTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
       {activeTab === 'creditors' && <CreditorsTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
       {activeTab === 'means-test' && <MeansTestTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
       {activeTab === 'review' && <ReviewTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
@@ -423,6 +428,7 @@ function OverviewTab({ caseData, debtor, caseId, onRefresh }) {
           <ChecklistItem done={!!debtor.first_name} label="Debtor information" />
           <ChecklistItem done={(caseData.income || []).length > 0} label="Income sources" />
           <ChecklistItem done={(caseData.expenses || []).length > 0} label="Monthly expenses" />
+          <ChecklistItem done={(caseData.income || []).length > 0 && (caseData.expenses || []).length > 0} label="Means test run" />
           <ChecklistItem done={(caseData.creditors || []).length > 0} label="Creditor matrix" />
           <ChecklistItem done={(caseData.assets || []).length > 0} label="Asset schedules" />
           <ChecklistItem done={(caseData.documents || []).length > 0} label="Supporting documents" />
@@ -651,11 +657,157 @@ function CreditorsTab({ caseData, caseId, onRefresh }) {
             </tbody>
           </table>
         </div>
-      ) : (
+      ) : !showForm && (
         <div className="card">
           <div className="empty-state">
-            <h3>No creditors added</h3>
-            <p>Add creditors manually or upload a credit report to auto-populate.</p>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <line x1="2" y1="10" x2="22" y2="10" />
+            </svg>
+            <h3>No creditors yet</h3>
+            <p>Add each creditor the debtor owes money to. These populate Schedule D, E, and F of the petition.</p>
+            <button className="btn btn-primary" onClick={() => setShowForm(true)}>+ Add First Creditor</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Assets Tab ───────────────────────────────────────────── */
+
+function AssetsTab({ caseData, caseId, onRefresh }) {
+  const assets = caseData.assets || [];
+  const totalValue = assets.reduce((sum, a) => sum + (a.current_value || 0), 0);
+  const totalExempt = assets.reduce((sum, a) => sum + (a.exemption_amount || 0), 0);
+
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    category: 'real_estate', description: '', currentValue: '', schedule: 'A',
+    exemptionStatute: '', exemptionAmount: '',
+  });
+
+  const ASSET_CATEGORIES = [
+    { value: 'real_estate', label: 'Real Estate', schedule: 'A' },
+    { value: 'vehicle', label: 'Vehicle', schedule: 'B' },
+    { value: 'bank_account', label: 'Bank Account', schedule: 'B' },
+    { value: 'household_goods', label: 'Household Goods', schedule: 'B' },
+    { value: 'clothing', label: 'Clothing', schedule: 'B' },
+    { value: 'retirement', label: 'Retirement Account', schedule: 'B' },
+    { value: 'other', label: 'Other', schedule: 'B' },
+  ];
+
+  const handleCategoryChange = (cat) => {
+    const match = ASSET_CATEGORIES.find(c => c.value === cat);
+    setForm(f => ({ ...f, category: cat, schedule: match?.schedule || 'B' }));
+  };
+
+  const handleAdd = async () => {
+    if (!form.description) return;
+    await window.tabula.assets.upsert(caseId, {
+      ...form,
+      currentValue: parseFloat(form.currentValue) || 0,
+      exemptionAmount: parseFloat(form.exemptionAmount) || 0,
+    });
+    setForm({ category: 'real_estate', description: '', currentValue: '', schedule: 'A', exemptionStatute: '', exemptionAmount: '' });
+    setShowForm(false);
+    onRefresh();
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div>
+          <span className="text-sm text-muted">{assets.length} asset{assets.length !== 1 ? 's' : ''} — </span>
+          <span className="text-sm" style={{ fontWeight: 500 }}>${totalValue.toLocaleString()} total value</span>
+          {totalExempt > 0 && (
+            <span className="text-sm text-muted"> · ${totalExempt.toLocaleString()} exempt</span>
+          )}
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={() => setShowForm(!showForm)}>
+          {showForm ? 'Cancel' : '+ Add Asset'}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card-body">
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">Category</label>
+                <select className="form-select" value={form.category} onChange={e => handleCategoryChange(e.target.value)}>
+                  {ASSET_CATEGORIES.map(c => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Current Value</label>
+                <input className="form-input" type="number" value={form.currentValue} onChange={e => setForm(f => ({ ...f, currentValue: e.target.value }))} placeholder="0.00" />
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Description</label>
+              <input className="form-input" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="e.g. 2018 Honda Civic, checking account at Chase, home at 123 Main St" />
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">Exemption Statute <span className="text-muted">(optional)</span></label>
+                <input className="form-input" value={form.exemptionStatute} onChange={e => setForm(f => ({ ...f, exemptionStatute: e.target.value }))} placeholder="e.g. TX Prop. Code § 41.001" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Exempt Amount</label>
+                <input className="form-input" type="number" value={form.exemptionAmount} onChange={e => setForm(f => ({ ...f, exemptionAmount: e.target.value }))} placeholder="0.00" />
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowForm(false)}>Cancel</button>
+              <button className="btn btn-primary btn-sm" onClick={handleAdd}>Add Asset</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {assets.length > 0 ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Category</th>
+                <th>Schedule</th>
+                <th style={{ textAlign: 'right' }}>Value</th>
+                <th style={{ textAlign: 'right' }}>Exempt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assets.map((a) => (
+                <tr key={a.id}>
+                  <td style={{ fontWeight: 500 }}>{a.description}</td>
+                  <td className="text-sm">{(a.category || '').replace('_', ' ')}</td>
+                  <td><span className="chapter-badge">Sch. {a.schedule}</span></td>
+                  <td className="text-sm" style={{ textAlign: 'right', fontFamily: 'var(--mono)' }}>
+                    ${(a.current_value || 0).toLocaleString()}
+                  </td>
+                  <td className="text-sm" style={{ textAlign: 'right', fontFamily: 'var(--mono)', color: a.exemption_amount > 0 ? 'var(--sage)' : 'var(--warm-gray)' }}>
+                    {a.exemption_amount > 0 ? `$${(a.exemption_amount || 0).toLocaleString()}` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : !showForm && (
+        <div className="card">
+          <div className="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            <h3>No assets listed</h3>
+            <p>List all property the debtor owns — real estate, vehicles, bank accounts, and personal property. These populate Schedules A and B.</p>
+            <button className="btn btn-primary" onClick={() => setShowForm(true)}>+ Add First Asset</button>
           </div>
         </div>
       )}

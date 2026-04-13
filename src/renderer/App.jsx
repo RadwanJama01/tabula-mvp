@@ -16,8 +16,10 @@ export default function App() {
     } else if (path === '/means-test') {
       setRoute({ page: 'means-test', params: {} });
     } else if (path.startsWith('/cases/')) {
-      const id = path.replace('/cases/', '');
-      setRoute({ page: 'case-detail', params: { id } });
+      const parts = path.replace('/cases/', '').split('/');
+      const id = parts[0];
+      const tab = parts[1] || null;
+      setRoute({ page: 'case-detail', params: { id, tab } });
     } else {
       setRoute({ page: path.replace('/', ''), params });
     }
@@ -38,7 +40,7 @@ export default function App() {
       case 'new-case':
         return <NewCase navigate={navigate} />;
       case 'case-detail':
-        return <CaseDetail caseId={route.params.id} navigate={navigate} />;
+        return <CaseDetail caseId={route.params.id} initialTab={route.params.tab} navigate={navigate} />;
       case 'means-test':
         return <MeansTest navigate={navigate} />;
       default:
