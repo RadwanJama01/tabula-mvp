@@ -16,5 +16,8 @@ COPY config.yaml /app/config.yaml
 ENV PORT=4000
 EXPOSE 4000
 
-# Use a shell form so $PORT expands at runtime rather than image build time.
-CMD litellm --config /app/config.yaml --port ${PORT} --num_workers 2
+# The base image has ENTRYPOINT ["litellm"], which means anything we put
+# in CMD gets appended as args. Reset the entrypoint so we can spawn our
+# own shell (for $PORT expansion) and run litellm cleanly.
+ENTRYPOINT []
+CMD ["sh", "-c", "litellm --config /app/config.yaml --port ${PORT:-4000} --num_workers 2"]
