@@ -20,4 +20,7 @@ EXPOSE 4000
 # in CMD gets appended as args. Reset the entrypoint so we can spawn our
 # own shell (for $PORT expansion) and run litellm cleanly.
 ENTRYPOINT []
-CMD ["sh", "-c", "litellm --config /app/config.yaml --port ${PORT:-4000} --num_workers 2"]
+# Dropped --num_workers 2 — LiteLLM's worker implementation spawns
+# duplicate uvicorn instances that fight over the same port on Railway.
+# For Railway's 1GB memory cap, a single process is enough.
+CMD ["sh", "-c", "litellm --config /app/config.yaml --port ${PORT:-4000}"]
