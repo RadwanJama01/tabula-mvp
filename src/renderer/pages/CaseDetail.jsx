@@ -5,6 +5,7 @@ import { getAllStates } from '../lib/median-income.js';
 import { computeCompleteness } from '../lib/case-completeness.js';
 import { computeDeadlines } from '../lib/deadlines.js';
 import AIAssistant from '../components/case/AIAssistant.jsx';
+import { AccidentDetailsTab, MedicalRecordsTab, CaseValuationTab, SettlementTab, PIDeadlinesTab } from '../components/case/PIWorkflow.jsx';
 
 const STATUS_LABELS = {
   intake: 'Intake',
@@ -13,7 +14,7 @@ const STATUS_LABELS = {
   filed: 'Filed',
 };
 
-const TABS = [
+const BANKRUPTCY_TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'timeline', label: 'Timeline' },
   { key: 'documents', label: 'Documents' },
@@ -22,6 +23,20 @@ const TABS = [
   { key: 'means-test', label: 'Means Test' },
   { key: 'review', label: 'Review' },
 ];
+
+const PI_TABS = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'accident', label: 'Accident & Insurance' },
+  { key: 'medical', label: 'Medical Records' },
+  { key: 'valuation', label: 'Case Valuation' },
+  { key: 'settlement', label: 'Settlement' },
+  { key: 'deadlines', label: 'Deadlines' },
+  { key: 'timeline', label: 'Timeline' },
+  { key: 'documents', label: 'Documents' },
+  { key: 'review', label: 'Review' },
+];
+
+const TABS = BANKRUPTCY_TABS; // default, overridden per-case below
 
 export default function CaseDetail({ caseId, initialTab, navigate }) {
   const [caseData, setCaseData] = useState(null);
@@ -136,41 +151,61 @@ export default function CaseDetail({ caseId, initialTab, navigate }) {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="tabs">
-        {TABS.map((tab) => (
-          <button
-            key={tab.key}
-            className={`tab ${activeTab === tab.key ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab.key)}
-          >
-            {tab.label}
-            {tab.key === 'creditors' && caseData.creditors?.length > 0 && (
-              <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.creditors.length}</span>
-            )}
-            {tab.key === 'documents' && caseData.documents?.length > 0 && (
-              <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.documents.length}</span>
-            )}
-            {tab.key === 'assets' && caseData.assets?.length > 0 && (
-              <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.assets.length}</span>
-            )}
-            {tab.key === 'review' && caseData.flags?.filter(f => !f.resolved).length > 0 && (
-              <span style={{ marginLeft: 6, color: 'var(--accent)' }}>
-                {caseData.flags.filter(f => !f.resolved).length}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* Tabs — practice-specific */}
+      {(() => {
+        const isPI = caseData.practice_type === 'personal_injury';
+        const tabs = isPI ? PI_TABS : BANKRUPTCY_TABS;
+        return (
+          <>
+            <div className="tabs">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  className={`tab ${activeTab === tab.key ? 'active' : ''}`}
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  {tab.label}
+                  {tab.key === 'creditors' && caseData.creditors?.length > 0 && (
+                    <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.creditors.length}</span>
+                  )}
+                  {tab.key === 'medical' && caseData.medicalRecords?.length > 0 && (
+                    <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.medicalRecords.length}</span>
+                  )}
+                  {tab.key === 'documents' && caseData.documents?.length > 0 && (
+                    <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.documents.length}</span>
+                  )}
+                  {tab.key === 'assets' && caseData.assets?.length > 0 && (
+                    <span style={{ marginLeft: 6, opacity: 0.5 }}>{caseData.assets.length}</span>
+                  )}
+                  {tab.key === 'review' && caseData.flags?.filter(f => !f.resolved).length > 0 && (
+                    <span style={{ marginLeft: 6, color: 'var(--accent)' }}>
+                      {caseData.flags.filter(f => !f.resolved).length}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
 
-      {/* Tab Content */}
-      {activeTab === 'overview' && <OverviewTab caseData={caseData} debtor={debtor} caseId={caseId} onRefresh={loadCase} />}
-      {activeTab === 'timeline' && <TimelineTab caseId={caseId} />}
-      {activeTab === 'documents' && <DocumentsTab caseData={caseData} onUpload={handleUploadDocuments} onExtract={handleExtract} />}
-      {activeTab === 'assets' && <AssetsTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
-      {activeTab === 'creditors' && <CreditorsTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
-      {activeTab === 'means-test' && <MeansTestTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
-      {activeTab === 'review' && <ReviewTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
+            {/* Shared tabs */}
+            {activeTab === 'overview' && <OverviewTab caseData={caseData} debtor={debtor} caseId={caseId} onRefresh={loadCase} />}
+            {activeTab === 'timeline' && <TimelineTab caseId={caseId} />}
+            {activeTab === 'documents' && <DocumentsTab caseData={caseData} onUpload={handleUploadDocuments} onExtract={handleExtract} />}
+            {activeTab === 'review' && <ReviewTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
+
+            {/* Bankruptcy-only tabs */}
+            {!isPI && activeTab === 'assets' && <AssetsTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
+            {!isPI && activeTab === 'creditors' && <CreditorsTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
+            {!isPI && activeTab === 'means-test' && <MeansTestTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
+
+            {/* PI-only tabs */}
+            {isPI && activeTab === 'accident' && <AccidentDetailsTab caseId={caseId} caseData={caseData} onRefresh={loadCase} />}
+            {isPI && activeTab === 'medical' && <MedicalRecordsTab caseId={caseId} onRefresh={loadCase} />}
+            {isPI && activeTab === 'valuation' && <CaseValuationTab caseId={caseId} caseData={caseData} />}
+            {isPI && activeTab === 'settlement' && <SettlementTab caseId={caseId} onRefresh={loadCase} />}
+            {isPI && activeTab === 'deadlines' && <PIDeadlinesTab caseId={caseId} onRefresh={loadCase} />}
+          </>
+        );
+      })()}
 
       {/* AI Assistant Panel */}
       <AIAssistant

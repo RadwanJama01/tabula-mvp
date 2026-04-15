@@ -99,6 +99,29 @@ contextBridge.exposeInMainWorld('tabula', {
     create: (template) => ipcRenderer.invoke('templates:create', template),
   },
 
+  // PI Case Details
+  pi: {
+    details: {
+      get: (caseId) => ipcRenderer.invoke('pi:details:get', caseId),
+      upsert: (caseId, data) => ipcRenderer.invoke('pi:details:upsert', caseId, data),
+    },
+    medical: {
+      list: (caseId) => ipcRenderer.invoke('pi:medical:list', caseId),
+      upsert: (caseId, record) => ipcRenderer.invoke('pi:medical:upsert', caseId, record),
+      delete: (id) => ipcRenderer.invoke('pi:medical:delete', id),
+    },
+    settlements: {
+      list: (caseId) => ipcRenderer.invoke('pi:settlements:list', caseId),
+      create: (caseId, data) => ipcRenderer.invoke('pi:settlements:create', caseId, data),
+      delete: (id) => ipcRenderer.invoke('pi:settlements:delete', id),
+    },
+    statutes: {
+      list: (caseId) => ipcRenderer.invoke('pi:statutes:list', caseId),
+      upsert: (caseId, data) => ipcRenderer.invoke('pi:statutes:upsert', caseId, data),
+      delete: (id) => ipcRenderer.invoke('pi:statutes:delete', id),
+    },
+  },
+
   // Navigation listener (from menu bar)
   onNavigate: (callback) => {
     ipcRenderer.on('navigate', (_, path) => callback(path));

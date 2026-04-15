@@ -844,3 +844,164 @@ tbody tr:last-child td {
 .ai-thinking {
   animation: ai-pulse 1.5s ease-in-out infinite;
 }
+
+/* ─── PI Workflow ────────────────────────────────────────────── */
+
+.pi-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.pi-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pi-detail-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warm-gray);
+}
+
+.pi-detail-value {
+  font-size: 0.88rem;
+  color: var(--ink);
+}
+
+/* Modal overlay for PI forms */
+.pi-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.pi-modal {
+  background: white;
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  width: 90%;
+  max-width: 620px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+}
+
+/* Status badges for medical records */
+.pi-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.pi-status-badge.ongoing { background: var(--blue-light); color: var(--blue); }
+.pi-status-badge.completed { background: var(--green-light); color: var(--green); }
+.pi-status-badge.referred { background: var(--amber-light); color: var(--amber); }
+.pi-status-badge.pending_records { background: var(--red-light); color: var(--red); }
+
+/* Case valuation calculator rows */
+.pi-calc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  font-size: 0.88rem;
+}
+
+.pi-calc-value {
+  font-family: var(--mono);
+  font-size: 0.88rem;
+}
+
+.pi-calc-divider {
+  height: 1px;
+  background: var(--cream);
+  margin: 4px 0;
+}
+
+.pi-calc-total {
+  font-size: 1.05rem;
+  font-weight: 700;
+  padding: 12px 0 4px;
+  border-top: 2px solid var(--ink);
+  margin-top: 4px;
+}
+
+/* Settlement negotiation timeline */
+.pi-negotiation-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pi-negotiation-entry {
+  display: flex;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--cream);
+  position: relative;
+}
+.pi-negotiation-entry:last-child { border-bottom: none; }
+
+.pi-neg-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.pi-neg-dot.demand { background: var(--blue); }
+.pi-neg-dot.offer { background: var(--amber); }
+.pi-neg-dot.counter { background: var(--sage); }
+.pi-neg-dot.final { background: var(--green); }
+.pi-neg-dot.mediation { background: var(--accent); }
+
+.pi-neg-content {
+  flex: 1;
+}
+
+.pi-neg-type {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.pi-neg-type.demand { background: var(--blue-light); color: var(--blue); }
+.pi-neg-type.offer { background: var(--amber-light); color: var(--amber); }
+.pi-neg-type.counter { background: var(--sage-light); color: var(--sage); }
+.pi-neg-type.final { background: var(--green-light); color: var(--green); }
+.pi-neg-type.mediation { background: var(--red-light); color: var(--accent); }
+
+/* Deadline cards */
+.pi-deadline-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--cream);
+  margin-bottom: 8px;
+  transition: var(--transition);
+}
+.pi-deadline-card:hover { border-color: var(--warm-gray); }
+.pi-deadline-card.overdue {
+  border-color: var(--red);
+  background: var(--red-light);
+}
+.pi-deadline-card.urgent {
+  border-color: var(--amber);
+  background: var(--amber-light);
+}
+.pi-deadline-card.filed {
+  border-color: var(--green);
+  background: var(--green-light);
+  opacity: 0.7;
+}

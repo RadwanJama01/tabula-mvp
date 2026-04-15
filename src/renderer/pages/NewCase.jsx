@@ -80,7 +80,11 @@ export default function NewCase({ navigate }) {
       <div className="page-header">
         <div>
           <h1 className="page-title">New Case</h1>
-          <p className="page-subtitle">Enter debtor information to create a new bankruptcy case</p>
+          <p className="page-subtitle">
+            {form.practiceType === 'bankruptcy' ? 'Enter debtor information to create a new bankruptcy case' :
+             form.practiceType === 'personal_injury' ? 'Enter client and accident information to open a new PI case' :
+             'Enter client information to create a new case'}
+          </p>
         </div>
         <button className="btn btn-ghost" onClick={() => navigate('/')}>
           Cancel

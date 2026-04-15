@@ -211,6 +211,85 @@ function initDatabase() {
     );
   `);
 
+  // PI case details (accident info, insurance, liability)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pi_case_details (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL UNIQUE REFERENCES cases(id) ON DELETE CASCADE,
+      accident_date TEXT,
+      accident_type TEXT,
+      accident_location TEXT,
+      accident_description TEXT,
+      police_report_number TEXT,
+      weather_conditions TEXT,
+      liability_assessment TEXT,
+      comparative_fault_pct REAL DEFAULT 0,
+      insurance_company TEXT,
+      insurance_policy_number TEXT,
+      insurance_adjuster TEXT,
+      insurance_adjuster_phone TEXT,
+      insurance_claim_number TEXT,
+      insurance_coverage_limit REAL,
+      at_fault_party TEXT,
+      at_fault_insurance TEXT,
+      at_fault_policy_limit REAL,
+      um_uim_available INTEGER DEFAULT 0,
+      um_uim_limit REAL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  // Medical records / treatment tracking
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pi_medical_records (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      provider_name TEXT NOT NULL,
+      provider_type TEXT,
+      treatment_type TEXT,
+      first_visit TEXT,
+      last_visit TEXT,
+      total_visits INTEGER DEFAULT 0,
+      total_billed REAL DEFAULT 0,
+      total_paid REAL DEFAULT 0,
+      lien_amount REAL DEFAULT 0,
+      has_lien INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'ongoing',
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  // Settlement negotiations log
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pi_settlements (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      type TEXT NOT NULL,
+      from_party TEXT,
+      amount REAL NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  // Statute of limitations tracking
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pi_statutes (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      statute_type TEXT NOT NULL,
+      jurisdiction TEXT,
+      deadline TEXT NOT NULL,
+      filed_date TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+
   seedDemoData();
 }
 
@@ -653,6 +732,13 @@ function registerIPC() {
     c.creditors = db.prepare('SELECT * FROM creditors WHERE case_id = ?').all(id);
     c.documents = db.prepare('SELECT * FROM documents WHERE case_id = ?').all(id);
     c.flags = db.prepare('SELECT * FROM review_flags WHERE case_id = ?').all(id);
+    // PI-specific data
+    if (c.practice_type === 'personal_injury') {
+      c.piDetails = db.prepare('SELECT * FROM pi_case_details WHERE case_id = ?').get(id) || null;
+      c.medicalRecords = db.prepare('SELECT * FROM pi_medical_records WHERE case_id = ? ORDER BY first_visit DESC').all(id);
+      c.settlements = db.prepare('SELECT * FROM pi_settlements WHERE case_id = ? ORDER BY date DESC').all(id);
+      c.statutes = db.prepare('SELECT * FROM pi_statutes WHERE case_id = ? ORDER BY deadline ASC').all(id);
+    }
     return c;
   });
 
@@ -1054,22 +1140,54 @@ You can help with:
 
 Be concise, specific to THIS case, and cite relevant bankruptcy code sections when applicable. If you identify a risk, flag it clearly.`;
     } else if (practiceType === 'personal_injury') {
+      const piDetails = db.prepare('SELECT * FROM pi_case_details WHERE case_id = ?').get(caseId);
+      const medRecords = db.prepare('SELECT * FROM pi_medical_records WHERE case_id = ?').all(caseId);
+      const settlements = db.prepare('SELECT * FROM pi_settlements WHERE case_id = ? ORDER BY date DESC').all(caseId);
+      const statutes = db.prepare('SELECT * FROM pi_statutes WHERE case_id = ?').all(caseId);
+
+      const totalMedBilled = medRecords.reduce((s, r) => s + (r.total_billed || 0), 0);
+      const totalLiens = medRecords.filter(r => r.has_lien).reduce((s, r) => s + (r.lien_amount || 0), 0);
+
       systemPrompt = `You are Tabula AI, a legal assistant specialized in personal injury law. You are helping an attorney with a PI case.
 
 CASE CONTEXT:
 - Client: ${debtors.map(d => `${d.first_name} ${d.last_name} (${d.address_city}, ${d.address_state})`).join('; ') || 'Not set'}
 - Status: ${caseData?.status || 'intake'}
 - District: ${caseData?.district || 'Not set'}
+${piDetails ? `
+ACCIDENT DETAILS:
+- Date: ${piDetails.accident_date || 'Not set'}
+- Type: ${piDetails.accident_type || 'Not set'}
+- Location: ${piDetails.accident_location || 'Not set'}
+- Liability: ${piDetails.liability_assessment || 'Not assessed'}
+- Comparative Fault: ${piDetails.comparative_fault_pct || 0}%
+- At-Fault Party: ${piDetails.at_fault_party || 'Unknown'}
+
+INSURANCE:
+- Client Insurance: ${piDetails.insurance_company || 'Not set'} (Limit: $${(piDetails.insurance_coverage_limit || 0).toLocaleString()})
+- At-Fault Insurance: ${piDetails.at_fault_insurance || 'Not set'} (Limit: $${(piDetails.at_fault_policy_limit || 0).toLocaleString()})
+- UM/UIM: ${piDetails.um_uim_available ? `Available ($${(piDetails.um_uim_limit || 0).toLocaleString()})` : 'Not available'}
+` : ''}
+MEDICAL TREATMENT (${medRecords.length} providers):
+- Total Billed: $${totalMedBilled.toLocaleString()}
+- Outstanding Liens: $${totalLiens.toLocaleString()}
+${medRecords.map(r => `- ${r.provider_name} (${r.provider_type || 'Unknown'}): $${(r.total_billed || 0).toLocaleString()} billed, ${r.total_visits || 0} visits, ${r.status}`).join('\n')}
+
+${settlements.length > 0 ? `SETTLEMENT HISTORY:\n${settlements.map(s => `- ${s.date}: ${s.type} - $${(s.amount || 0).toLocaleString()} from ${s.from_party || 'unknown'}`).join('\n')}` : ''}
+
+${statutes.length > 0 ? `DEADLINES:\n${statutes.map(s => `- ${s.statute_type}: ${s.deadline}${s.filed_date ? ' (FILED)' : ''}`).join('\n')}` : ''}
 ${notes.length > 0 ? `\nATTORNEY NOTES:\n${notes.map(n => `- ${n.content}`).join('\n')}` : ''}
 
 You can help with:
-1. Case valuation and settlement range analysis
-2. Statute of limitations tracking
-3. Demand letter drafting
-4. Medical record summarization strategy
-5. Liability analysis and comparative fault assessment
-6. Lien identification and resolution
-7. Discovery planning
+1. Case valuation and settlement range analysis (using medical specials multiplier method)
+2. Demand letter drafting with itemized damages
+3. Medical record analysis and treatment gap identification
+4. Liability analysis and comparative fault assessment
+5. Lien identification, verification, and resolution strategies
+6. Discovery planning and interrogatory preparation
+7. Statute of limitations tracking and compliance
+8. Insurance coverage analysis (stacking, UM/UIM, excess)
+9. Settlement distribution calculations (fees, costs, liens, net to client)
 
 Be concise, specific to THIS case, and cite relevant case law or statutes when applicable.`;
     } else {
@@ -1176,6 +1294,112 @@ Be concise, specific to THIS case, and help the attorney with analysis, drafting
       id, template.practiceType, template.name, template.description || '', JSON.stringify(template.data || {}), new Date().toISOString()
     );
     return { id };
+  });
+
+  // ─── PI Case Details ────────────────────────────────────────────
+  ipcMain.handle('pi:details:get', (_, caseId) => {
+    return db.prepare('SELECT * FROM pi_case_details WHERE case_id = ?').get(caseId) || null;
+  });
+
+  ipcMain.handle('pi:details:upsert', (_, caseId, data) => {
+    const { v4: uuid } = require('uuid');
+    const now = new Date().toISOString();
+    const existing = db.prepare('SELECT id, created_at FROM pi_case_details WHERE case_id = ?').get(caseId);
+    const id = existing?.id || uuid();
+    db.prepare(`INSERT OR REPLACE INTO pi_case_details (
+      id, case_id, accident_date, accident_type, accident_location, accident_description,
+      police_report_number, weather_conditions, liability_assessment, comparative_fault_pct,
+      insurance_company, insurance_policy_number, insurance_adjuster, insurance_adjuster_phone,
+      insurance_claim_number, insurance_coverage_limit, at_fault_party, at_fault_insurance,
+      at_fault_policy_limit, um_uim_available, um_uim_limit, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, caseId, data.accidentDate || null, data.accidentType || null, data.accidentLocation || null,
+      data.accidentDescription || null, data.policeReportNumber || null, data.weatherConditions || null,
+      data.liabilityAssessment || null, data.comparativeFaultPct || 0,
+      data.insuranceCompany || null, data.insurancePolicyNumber || null,
+      data.insuranceAdjuster || null, data.insuranceAdjusterPhone || null,
+      data.insuranceClaimNumber || null, data.insuranceCoverageLimit || null,
+      data.atFaultParty || null, data.atFaultInsurance || null, data.atFaultPolicyLimit || null,
+      data.umUimAvailable ? 1 : 0, data.umUimLimit || null,
+      existing ? existing.created_at || now : now, now
+    );
+    logCaseEvent(caseId, 'pi_details_updated', 'PI case details updated', { accident_type: data.accidentType });
+    return { id };
+  });
+
+  // ─── PI Medical Records ─────────────────────────────────────────
+  ipcMain.handle('pi:medical:list', (_, caseId) => {
+    return db.prepare('SELECT * FROM pi_medical_records WHERE case_id = ? ORDER BY first_visit DESC').all(caseId);
+  });
+
+  ipcMain.handle('pi:medical:upsert', (_, caseId, record) => {
+    const { v4: uuid } = require('uuid');
+    const now = new Date().toISOString();
+    const id = record.id || uuid();
+    const isNew = !record.id;
+    db.prepare(`INSERT OR REPLACE INTO pi_medical_records (
+      id, case_id, provider_name, provider_type, treatment_type,
+      first_visit, last_visit, total_visits, total_billed, total_paid,
+      lien_amount, has_lien, status, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, caseId, record.providerName, record.providerType || null, record.treatmentType || null,
+      record.firstVisit || null, record.lastVisit || null, record.totalVisits || 0,
+      record.totalBilled || 0, record.totalPaid || 0,
+      record.lienAmount || 0, record.hasLien ? 1 : 0, record.status || 'ongoing',
+      record.notes || null, isNew ? now : (record.created_at || now), now
+    );
+    if (isNew) {
+      logCaseEvent(caseId, 'medical_record_added', `Medical provider added: ${record.providerName}`,
+        { provider: record.providerName, billed: record.totalBilled });
+    }
+    return { id };
+  });
+
+  ipcMain.handle('pi:medical:delete', (_, id) => {
+    db.prepare('DELETE FROM pi_medical_records WHERE id = ?').run(id);
+    return { success: true };
+  });
+
+  // ─── PI Settlements ─────────────────────────────────────────────
+  ipcMain.handle('pi:settlements:list', (_, caseId) => {
+    return db.prepare('SELECT * FROM pi_settlements WHERE case_id = ? ORDER BY date DESC').all(caseId);
+  });
+
+  ipcMain.handle('pi:settlements:create', (_, caseId, data) => {
+    const { v4: uuid } = require('uuid');
+    const now = new Date().toISOString();
+    const id = uuid();
+    db.prepare('INSERT INTO pi_settlements (id, case_id, date, type, from_party, amount, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      id, caseId, data.date, data.type, data.fromParty || null, data.amount, data.notes || null, now
+    );
+    logCaseEvent(caseId, 'settlement_entry', `${data.type}: $${(data.amount || 0).toLocaleString()} from ${data.fromParty || 'unknown'}`,
+      { type: data.type, amount: data.amount });
+    return { id };
+  });
+
+  ipcMain.handle('pi:settlements:delete', (_, id) => {
+    db.prepare('DELETE FROM pi_settlements WHERE id = ?').run(id);
+    return { success: true };
+  });
+
+  // ─── PI Statutes ────────────────────────────────────────────────
+  ipcMain.handle('pi:statutes:list', (_, caseId) => {
+    return db.prepare('SELECT * FROM pi_statutes WHERE case_id = ? ORDER BY deadline ASC').all(caseId);
+  });
+
+  ipcMain.handle('pi:statutes:upsert', (_, caseId, data) => {
+    const { v4: uuid } = require('uuid');
+    const now = new Date().toISOString();
+    const id = data.id || uuid();
+    db.prepare('INSERT OR REPLACE INTO pi_statutes (id, case_id, statute_type, jurisdiction, deadline, filed_date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      id, caseId, data.statuteType, data.jurisdiction || null, data.deadline, data.filedDate || null, data.notes || null, now
+    );
+    return { id };
+  });
+
+  ipcMain.handle('pi:statutes:delete', (_, id) => {
+    db.prepare('DELETE FROM pi_statutes WHERE id = ?').run(id);
+    return { success: true };
   });
 }
 
