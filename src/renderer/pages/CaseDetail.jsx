@@ -4,6 +4,7 @@ import { runMeansTest } from '../lib/means-test.js';
 import { getAllStates } from '../lib/median-income.js';
 import { computeCompleteness } from '../lib/case-completeness.js';
 import { computeDeadlines } from '../lib/deadlines.js';
+import AIAssistant from '../components/case/AIAssistant.jsx';
 
 const STATUS_LABELS = {
   intake: 'Intake',
@@ -26,6 +27,7 @@ export default function CaseDetail({ caseId, initialTab, navigate }) {
   const [caseData, setCaseData] = useState(null);
   const [activeTab, setActiveTab] = useState(initialTab || 'overview');
   const [loading, setLoading] = useState(true);
+  const [aiOpen, setAiOpen] = useState(false);
 
   const loadCase = useCallback(async () => {
     setLoading(true);
@@ -89,9 +91,18 @@ export default function CaseDetail({ caseId, initialTab, navigate }) {
         <div>
           <h1 className="page-title">{debtor.first_name} {debtor.last_name}</h1>
           <div className="case-meta">
+            {caseData.practice_type && caseData.practice_type !== 'bankruptcy' && (
+              <span className="case-meta-item">
+                <span className="chapter-badge" style={{ textTransform: 'capitalize' }}>
+                  {(caseData.practice_type || '').replace('_', ' ')}
+                </span>
+              </span>
+            )}
+            {(!caseData.practice_type || caseData.practice_type === 'bankruptcy') && (
             <span className="case-meta-item">
               <span className="chapter-badge">Chapter {caseData.chapter}</span>
             </span>
+            )}
             <span className="case-meta-item">
               <strong>District:</strong> {caseData.district || 'Not set'}
             </span>
@@ -101,6 +112,16 @@ export default function CaseDetail({ caseId, initialTab, navigate }) {
           </div>
         </div>
         <div className="flex gap-2">
+          <button
+            className={`btn btn-sm ${aiOpen ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setAiOpen(!aiOpen)}
+            title="Toggle AI Assistant"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1.27A7 7 0 0 1 7.27 19H6a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h-1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z" />
+            </svg>
+            AI Assistant
+          </button>
           <span className={`badge ${caseData.status}`}>{STATUS_LABELS[caseData.status]}</span>
           <select
             className="form-select"
@@ -150,6 +171,14 @@ export default function CaseDetail({ caseId, initialTab, navigate }) {
       {activeTab === 'creditors' && <CreditorsTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
       {activeTab === 'means-test' && <MeansTestTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
       {activeTab === 'review' && <ReviewTab caseData={caseData} caseId={caseId} onRefresh={loadCase} />}
+
+      {/* AI Assistant Panel */}
+      <AIAssistant
+        caseId={caseId}
+        practiceType={caseData.practice_type || 'bankruptcy'}
+        isOpen={aiOpen}
+        onClose={() => setAiOpen(false)}
+      />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import NewCase from './pages/NewCase.jsx';
 import CaseDetail from './pages/CaseDetail.jsx';
 import MeansTest from './pages/MeansTest.jsx';
+import Analytics from './pages/Analytics.jsx';
 
 export default function App() {
   const [route, setRoute] = useState({ page: 'dashboard', params: {} });
@@ -15,6 +16,8 @@ export default function App() {
       setRoute({ page: 'new-case', params: {} });
     } else if (path === '/means-test') {
       setRoute({ page: 'means-test', params: {} });
+    } else if (path === '/analytics') {
+      setRoute({ page: 'analytics', params: {} });
     } else if (path.startsWith('/cases/')) {
       const parts = path.replace('/cases/', '').split('/');
       const id = parts[0];
@@ -43,6 +46,8 @@ export default function App() {
         return <CaseDetail caseId={route.params.id} initialTab={route.params.tab} navigate={navigate} />;
       case 'means-test':
         return <MeansTest navigate={navigate} />;
+      case 'analytics':
+        return <Analytics navigate={navigate} />;
       default:
         return <Dashboard navigate={navigate} />;
     }

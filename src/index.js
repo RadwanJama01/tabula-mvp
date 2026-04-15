@@ -156,6 +156,61 @@ function initDatabase() {
     db.prepare("ALTER TABLE cases ADD COLUMN filed_at TEXT").run();
   }
 
+  // Multi-practice upgrade: add practice_type to cases
+  if (!caseCols.includes('practice_type')) {
+    db.prepare("ALTER TABLE cases ADD COLUMN practice_type TEXT NOT NULL DEFAULT 'bankruptcy'").run();
+  }
+
+  // Case notes table — persistent notes/memos per case
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS case_notes (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      author TEXT DEFAULT 'attorney',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  // AI conversations table — stores AI assistant chat history per case
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_conversations (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_conv_case ON ai_conversations(case_id, created_at);
+  `);
+
+  // Practice analytics table — revenue + time tracking
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS practice_analytics (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      fee_amount REAL DEFAULT 0,
+      fee_type TEXT DEFAULT 'flat',
+      hours_logged REAL DEFAULT 0,
+      filed_date TEXT,
+      closed_date TEXT,
+      outcome TEXT
+    );
+  `);
+
+  // Case templates table — reusable case templates
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS case_templates (
+      id TEXT PRIMARY KEY,
+      practice_type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      template_data TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+
   seedDemoData();
 }
 
@@ -605,7 +660,7 @@ function registerIPC() {
     const { v4: uuid } = require('uuid');
     const id = uuid();
     const now = new Date().toISOString();
-    db.prepare('INSERT INTO cases (id, chapter, district, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, data.chapter || 7, data.district || '', 'intake', now, now);
+    db.prepare('INSERT INTO cases (id, chapter, district, practice_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, data.chapter || 7, data.district || '', data.practiceType || 'bankruptcy', 'intake', now, now);
     if (data.debtor) {
       db.prepare('INSERT INTO debtors (id, case_id, first_name, last_name, ssn, dob, address_street, address_city, address_state, address_zip, phone, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         uuid(), id, data.debtor.firstName, data.debtor.lastName, data.debtor.ssn || '', data.debtor.dob || '',
@@ -920,7 +975,207 @@ function registerIPC() {
       inProgress: db.prepare("SELECT COUNT(*) as c FROM cases WHERE status = 'in_progress'").get().c,
       ready: db.prepare("SELECT COUNT(*) as c FROM cases WHERE status = 'ready'").get().c,
       filed: db.prepare("SELECT COUNT(*) as c FROM cases WHERE status = 'filed'").get().c,
+      byPractice: db.prepare("SELECT practice_type, COUNT(*) as count FROM cases GROUP BY practice_type").all(),
     };
+  });
+
+  // ─── Case Notes CRUD ──────────────────────────────────────────
+  ipcMain.handle('notes:list', (_, caseId) => {
+    return db.prepare('SELECT * FROM case_notes WHERE case_id = ? ORDER BY created_at DESC').all(caseId);
+  });
+
+  ipcMain.handle('notes:create', (_, caseId, content) => {
+    const { v4: uuid } = require('uuid');
+    const id = uuid();
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO case_notes (id, case_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, caseId, content, now, now);
+    logCaseEvent(caseId, 'note_added', 'Note added to case', { note_id: id });
+    return { id };
+  });
+
+  ipcMain.handle('notes:update', (_, id, content) => {
+    db.prepare('UPDATE case_notes SET content = ?, updated_at = ? WHERE id = ?').run(content, new Date().toISOString(), id);
+    return { success: true };
+  });
+
+  ipcMain.handle('notes:delete', (_, id) => {
+    db.prepare('DELETE FROM case_notes WHERE id = ?').run(id);
+    return { success: true };
+  });
+
+  // ─── AI Case Assistant ─────────────────────────────────────────
+  ipcMain.handle('ai:chat', async (_, caseId, userMessage) => {
+    const { v4: uuid } = require('uuid');
+    const now = new Date().toISOString();
+
+    // Save user message
+    db.prepare('INSERT INTO ai_conversations (id, case_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)').run(uuid(), caseId, 'user', userMessage, now);
+
+    // Build case context
+    const caseData = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
+    const debtors = db.prepare('SELECT first_name, last_name, address_state, address_city FROM debtors WHERE case_id = ?').all(caseId);
+    const creditors = db.prepare('SELECT name, debt_type, schedule, amount_claimed FROM creditors WHERE case_id = ?').all(caseId);
+    const income = db.prepare('SELECT source, employer_name, gross_monthly, net_monthly FROM income WHERE case_id = ?').all(caseId);
+    const expenses = db.prepare('SELECT category, description, monthly_amount FROM expenses WHERE case_id = ?').all(caseId);
+    const assets = db.prepare('SELECT category, description, current_value, exemption_statute FROM assets WHERE case_id = ?').all(caseId);
+    const notes = db.prepare('SELECT content FROM case_notes WHERE case_id = ? ORDER BY created_at DESC LIMIT 10').all(caseId);
+    const history = db.prepare('SELECT role, content FROM ai_conversations WHERE case_id = ? ORDER BY created_at DESC LIMIT 20').all(caseId).reverse();
+
+    const totalDebt = creditors.reduce((s, c) => s + (c.amount_claimed || 0), 0);
+    const totalMonthlyIncome = income.reduce((s, i) => s + (i.gross_monthly || 0), 0);
+    const totalMonthlyExpenses = expenses.reduce((s, e) => s + (e.monthly_amount || 0), 0);
+
+    const practiceType = caseData?.practice_type || 'bankruptcy';
+
+    let systemPrompt;
+    if (practiceType === 'bankruptcy') {
+      systemPrompt = `You are Tabula AI, a legal assistant specialized in consumer bankruptcy law. You are helping an attorney with a Chapter ${caseData?.chapter || 7} bankruptcy case.
+
+CASE CONTEXT:
+- Debtor: ${debtors.map(d => `${d.first_name} ${d.last_name} (${d.address_city}, ${d.address_state})`).join('; ') || 'Not set'}
+- Chapter: ${caseData?.chapter || 7}
+- District: ${caseData?.district || 'Not set'}
+- Status: ${caseData?.status || 'intake'}
+- Total Debt: $${totalDebt.toLocaleString()}
+- Monthly Income: $${totalMonthlyIncome.toLocaleString()} gross
+- Monthly Expenses: $${totalMonthlyExpenses.toLocaleString()}
+- Disposable Income: $${(totalMonthlyIncome - totalMonthlyExpenses).toLocaleString()}/mo
+- Creditors (${creditors.length}): ${creditors.map(c => `${c.name} ($${(c.amount_claimed||0).toLocaleString()}, Sch ${c.schedule})`).join(', ') || 'None'}
+- Assets: ${assets.map(a => `${a.description} ($${(a.current_value||0).toLocaleString()})`).join(', ') || 'None'}
+${notes.length > 0 ? `\nATTORNEY NOTES:\n${notes.map(n => `- ${n.content}`).join('\n')}` : ''}
+
+You can help with:
+1. Means test analysis and Chapter 7 vs 13 recommendations
+2. Exemption planning (state-specific exemption statutes)
+3. Identifying potential issues (fraudulent transfers, preference payments, non-dischargeable debts)
+4. Creditor matrix review and schedule assignments
+5. Filing strategy and timeline
+6. Drafting attorney notes and memos
+
+Be concise, specific to THIS case, and cite relevant bankruptcy code sections when applicable. If you identify a risk, flag it clearly.`;
+    } else if (practiceType === 'personal_injury') {
+      systemPrompt = `You are Tabula AI, a legal assistant specialized in personal injury law. You are helping an attorney with a PI case.
+
+CASE CONTEXT:
+- Client: ${debtors.map(d => `${d.first_name} ${d.last_name} (${d.address_city}, ${d.address_state})`).join('; ') || 'Not set'}
+- Status: ${caseData?.status || 'intake'}
+- District: ${caseData?.district || 'Not set'}
+${notes.length > 0 ? `\nATTORNEY NOTES:\n${notes.map(n => `- ${n.content}`).join('\n')}` : ''}
+
+You can help with:
+1. Case valuation and settlement range analysis
+2. Statute of limitations tracking
+3. Demand letter drafting
+4. Medical record summarization strategy
+5. Liability analysis and comparative fault assessment
+6. Lien identification and resolution
+7. Discovery planning
+
+Be concise, specific to THIS case, and cite relevant case law or statutes when applicable.`;
+    } else {
+      systemPrompt = `You are Tabula AI, a legal assistant helping an attorney with a case.
+
+CASE CONTEXT:
+- Client: ${debtors.map(d => `${d.first_name} ${d.last_name}`).join('; ') || 'Not set'}
+- Status: ${caseData?.status || 'intake'}
+- District: ${caseData?.district || 'Not set'}
+${notes.length > 0 ? `\nATTORNEY NOTES:\n${notes.map(n => `- ${n.content}`).join('\n')}` : ''}
+
+Be concise, specific to THIS case, and help the attorney with analysis, drafting, research, and strategy.`;
+    }
+
+    try {
+      const client = getAnthropicClient();
+
+      const messages = history.map(h => ({ role: h.role, content: h.content }));
+      messages.push({ role: 'user', content: userMessage });
+
+      const response = await client.messages.create({
+        model: process.env.LITELLM_BASE_URL ? 'tabula-extract' : 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages,
+      });
+
+      const assistantMessage = response.content.find(b => b.type === 'text')?.text || 'I could not generate a response.';
+
+      // Save assistant response
+      db.prepare('INSERT INTO ai_conversations (id, case_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)').run(uuid(), caseId, 'assistant', assistantMessage, new Date().toISOString());
+
+      return { message: assistantMessage };
+    } catch (err) {
+      console.error('AI chat error:', err.message);
+      return { message: `I'm unable to connect to the AI service right now. Error: ${err.message}`, error: true };
+    }
+  });
+
+  ipcMain.handle('ai:history', (_, caseId) => {
+    return db.prepare('SELECT role, content, created_at FROM ai_conversations WHERE case_id = ? ORDER BY created_at ASC').all(caseId);
+  });
+
+  ipcMain.handle('ai:clear', (_, caseId) => {
+    db.prepare('DELETE FROM ai_conversations WHERE case_id = ?').run(caseId);
+    return { success: true };
+  });
+
+  // ─── Practice Analytics ────────────────────────────────────────
+  ipcMain.handle('analytics:upsert', (_, caseId, data) => {
+    const { v4: uuid } = require('uuid');
+    const existing = db.prepare('SELECT id FROM practice_analytics WHERE case_id = ?').get(caseId);
+    const id = existing?.id || uuid();
+    db.prepare(`INSERT OR REPLACE INTO practice_analytics (id, case_id, fee_amount, fee_type, hours_logged, filed_date, closed_date, outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, caseId, data.feeAmount || 0, data.feeType || 'flat', data.hoursLogged || 0, data.filedDate || null, data.closedDate || null, data.outcome || null
+    );
+    return { id };
+  });
+
+  ipcMain.handle('analytics:get', (_, caseId) => {
+    return db.prepare('SELECT * FROM practice_analytics WHERE case_id = ?').get(caseId) || null;
+  });
+
+  ipcMain.handle('analytics:firm-overview', () => {
+    const now = new Date();
+    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthStr = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, '0')}`;
+
+    return {
+      totalRevenue: db.prepare('SELECT COALESCE(SUM(fee_amount), 0) as total FROM practice_analytics').get().total,
+      thisMonthRevenue: db.prepare("SELECT COALESCE(SUM(fee_amount), 0) as total FROM practice_analytics pa JOIN cases c ON c.id = pa.case_id WHERE c.created_at LIKE ?").get(`${thisMonth}%`).total,
+      lastMonthRevenue: db.prepare("SELECT COALESCE(SUM(fee_amount), 0) as total FROM practice_analytics pa JOIN cases c ON c.id = pa.case_id WHERE c.created_at LIKE ?").get(`${lastMonthStr}%`).total,
+      avgFee: db.prepare('SELECT COALESCE(AVG(fee_amount), 0) as avg FROM practice_analytics WHERE fee_amount > 0').get().avg,
+      totalHours: db.prepare('SELECT COALESCE(SUM(hours_logged), 0) as total FROM practice_analytics').get().total,
+      casesByPractice: db.prepare("SELECT practice_type, COUNT(*) as count FROM cases GROUP BY practice_type").all(),
+      casesByMonth: db.prepare(`
+        SELECT
+          substr(created_at, 1, 7) as month,
+          COUNT(*) as count,
+          COALESCE(SUM(pa.fee_amount), 0) as revenue
+        FROM cases c
+        LEFT JOIN practice_analytics pa ON pa.case_id = c.id
+        GROUP BY month
+        ORDER BY month DESC
+        LIMIT 12
+      `).all(),
+      casesByStatus: db.prepare("SELECT status, COUNT(*) as count FROM cases GROUP BY status").all(),
+    };
+  });
+
+  // ─── Case Templates ────────────────────────────────────────────
+  ipcMain.handle('templates:list', (_, practiceType) => {
+    if (practiceType) {
+      return db.prepare('SELECT * FROM case_templates WHERE practice_type = ? ORDER BY name').all(practiceType);
+    }
+    return db.prepare('SELECT * FROM case_templates ORDER BY practice_type, name').all();
+  });
+
+  ipcMain.handle('templates:create', (_, template) => {
+    const { v4: uuid } = require('uuid');
+    const id = uuid();
+    db.prepare('INSERT INTO case_templates (id, practice_type, name, description, template_data, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+      id, template.practiceType, template.name, template.description || '', JSON.stringify(template.data || {}), new Date().toISOString()
+    );
+    return { id };
   });
 }
 

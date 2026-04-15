@@ -40,6 +40,7 @@ export default function NewCase({ navigate }) {
     zip: '',
     chapter: 7,
     district: '',
+    practiceType: 'bankruptcy',
   });
   const [saving, setSaving] = useState(false);
 
@@ -51,8 +52,9 @@ export default function NewCase({ navigate }) {
     setSaving(true);
     try {
       const result = await window.tabula.cases.create({
-        chapter: form.chapter,
+        chapter: form.practiceType === 'bankruptcy' ? form.chapter : null,
         district: form.district,
+        practiceType: form.practiceType,
         debtor: {
           firstName: form.firstName,
           lastName: form.lastName,
@@ -88,10 +90,30 @@ export default function NewCase({ navigate }) {
       <form onSubmit={handleSubmit}>
         <div className="card" style={{ marginBottom: 24 }}>
           <div className="card-header">
-            <span className="card-title">Filing Information</span>
+            <span className="card-title">Case Information</span>
           </div>
           <div className="card-body">
+            <div className="form-group">
+              <label className="form-label">Practice Area</label>
+              <div className="filter-pills" style={{ marginBottom: 16 }}>
+                {[
+                  { key: 'bankruptcy', label: 'Bankruptcy' },
+                  { key: 'personal_injury', label: 'Personal Injury' },
+                  { key: 'general', label: 'General / Other' },
+                ].map(p => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    className={`filter-pill ${form.practiceType === p.key ? 'active' : ''}`}
+                    onClick={() => update('practiceType', p.key)}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="form-row">
+              {form.practiceType === 'bankruptcy' && (
               <div className="form-group">
                 <label className="form-label">Chapter</label>
                 <select
@@ -103,6 +125,7 @@ export default function NewCase({ navigate }) {
                   <option value={13}>Chapter 13 — Wage Earner Plan</option>
                 </select>
               </div>
+              )}
               <div className="form-group">
                 <label className="form-label">District</label>
                 <select
@@ -122,7 +145,7 @@ export default function NewCase({ navigate }) {
 
         <div className="card" style={{ marginBottom: 24 }}>
           <div className="card-header">
-            <span className="card-title">Debtor Information</span>
+            <span className="card-title">{form.practiceType === 'bankruptcy' ? 'Debtor' : 'Client'} Information</span>
           </div>
           <div className="card-body">
             <div className="form-row">

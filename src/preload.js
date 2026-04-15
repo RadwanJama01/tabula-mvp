@@ -71,6 +71,34 @@ contextBridge.exposeInMainWorld('tabula', {
     checkApiKey: () => ipcRenderer.invoke('means-test:check-api-key'),
   },
 
+  // Notes
+  notes: {
+    list: (caseId) => ipcRenderer.invoke('notes:list', caseId),
+    create: (caseId, content) => ipcRenderer.invoke('notes:create', caseId, content),
+    update: (id, content) => ipcRenderer.invoke('notes:update', id, content),
+    delete: (id) => ipcRenderer.invoke('notes:delete', id),
+  },
+
+  // AI Assistant
+  ai: {
+    chat: (caseId, message) => ipcRenderer.invoke('ai:chat', caseId, message),
+    history: (caseId) => ipcRenderer.invoke('ai:history', caseId),
+    clear: (caseId) => ipcRenderer.invoke('ai:clear', caseId),
+  },
+
+  // Analytics
+  analytics: {
+    upsert: (caseId, data) => ipcRenderer.invoke('analytics:upsert', caseId, data),
+    get: (caseId) => ipcRenderer.invoke('analytics:get', caseId),
+    firmOverview: () => ipcRenderer.invoke('analytics:firm-overview'),
+  },
+
+  // Templates
+  templates: {
+    list: (practiceType) => ipcRenderer.invoke('templates:list', practiceType),
+    create: (template) => ipcRenderer.invoke('templates:create', template),
+  },
+
   // Navigation listener (from menu bar)
   onNavigate: (callback) => {
     ipcRenderer.on('navigate', (_, path) => callback(path));
