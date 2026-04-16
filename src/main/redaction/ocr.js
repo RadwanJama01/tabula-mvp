@@ -15,15 +15,36 @@ async function getWorker() {
 
 /**
  * OCR an image file.
+ * tesseract.js v5+ stopped returning per-word bboxes by default — you
+ * have to opt in via the `blocks: true` output flag. Without it `data.words`
+ * is undefined and the redaction pipeline silently detects PII but can't
+ * locate it on the image, producing a "redacted" file identical to the
+ * original.
  * @param {string} imagePath - absolute path to PNG/JPG
  * @returns {Promise<{text: string, words: Array<{text, bbox}>}>}
  */
 async function ocrImage(imagePath) {
   const worker = await getWorker();
-  const { data } = await worker.recognize(imagePath);
+  const { data } = await worker.recognize(imagePath, {}, { blocks: true });
+
+  // In v5+, words live inside data.blocks[].paragraphs[].lines[].words[].
+  // Flatten them out, and fall back to data.words if the block structure
+  // isn't present (older versions).
+  let words = data.words || [];
+  if ((!words || words.length === 0) && Array.isArray(data.blocks)) {
+    words = [];
+    for (const block of data.blocks) {
+      for (const para of block.paragraphs || []) {
+        for (const line of para.lines || []) {
+          for (const w of line.words || []) words.push(w);
+        }
+      }
+    }
+  }
+
   return {
     text: data.text,
-    words: (data.words || []).map(w => ({
+    words: words.map(w => ({
       text: w.text,
       bbox: w.bbox, // { x0, y0, x1, y1 }
       confidence: w.confidence,
@@ -49,11 +70,11 @@ async function ocrPdf(pdfPath) {
 
 /**
  * Rasterize each page of a PDF to a temporary PNG file.
- * Uses pdfjs-dist in Node mode — no native deps.
+ * pdfjs-dist >= 4 is ESM-only, so we use dynamic import from CommonJS.
  */
 async function rasterizePdf(pdfPath) {
-  const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
-  const { createCanvas } = require('canvas'); // installed as a peer of pdfjs rendering
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const { createCanvas } = require('canvas');
   const data = new Uint8Array(fs.readFileSync(pdfPath));
   const loadingTask = pdfjs.getDocument({ data });
   const pdf = await loadingTask.promise;
