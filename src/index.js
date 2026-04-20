@@ -1323,6 +1323,16 @@ function registerIPC() {
     const notes = db.prepare('SELECT content FROM case_notes WHERE case_id = ? ORDER BY created_at DESC LIMIT 10').all(caseId);
     const history = db.prepare('SELECT role, content FROM ai_conversations WHERE case_id = ? ORDER BY created_at DESC LIMIT 20').all(caseId).reverse();
 
+    // "What changed since last conversation" — find events after the last AI message
+    const lastAiMsg = db.prepare('SELECT created_at FROM ai_conversations WHERE case_id = ? AND role = ? ORDER BY created_at DESC LIMIT 1').get(caseId, 'assistant');
+    let changesSummary = '';
+    if (lastAiMsg) {
+      const recentEvents = db.prepare('SELECT description FROM case_events WHERE case_id = ? AND occurred_at > ? ORDER BY occurred_at ASC LIMIT 10').all(caseId, lastAiMsg.created_at);
+      if (recentEvents.length > 0) {
+        changesSummary = `\n\nCHANGES SINCE LAST CONVERSATION:\n${recentEvents.map(e => `- ${e.description}`).join('\n')}`;
+      }
+    }
+
     const totalDebt = creditors.reduce((s, c) => s + (c.amount_claimed || 0), 0);
     const totalMonthlyIncome = income.reduce((s, i) => s + (i.gross_monthly || 0), 0);
     const totalMonthlyExpenses = expenses.reduce((s, e) => s + (e.monthly_amount || 0), 0);
@@ -1354,7 +1364,7 @@ You can help with:
 5. Filing strategy and timeline
 6. Drafting attorney notes and memos
 
-Be concise, specific to THIS case, and cite relevant bankruptcy code sections when applicable. If you identify a risk, flag it clearly.`;
+Be concise, specific to THIS case, and cite relevant bankruptcy code sections when applicable. If you identify a risk, flag it clearly.${changesSummary}`;
     } else if (practiceType === 'personal_injury') {
       const piDetails = db.prepare('SELECT * FROM pi_case_details WHERE case_id = ?').get(caseId);
       const medRecords = db.prepare('SELECT * FROM pi_medical_records WHERE case_id = ?').all(caseId);
@@ -1405,7 +1415,7 @@ You can help with:
 8. Insurance coverage analysis (stacking, UM/UIM, excess)
 9. Settlement distribution calculations (fees, costs, liens, net to client)
 
-Be concise, specific to THIS case, and cite relevant case law or statutes when applicable.`;
+Be concise, specific to THIS case, and cite relevant case law or statutes when applicable.${changesSummary}`;
     } else {
       systemPrompt = `You are Tabula AI, a legal assistant helping an attorney with a case.
 
@@ -1415,7 +1425,7 @@ CASE CONTEXT:
 - District: ${caseData?.district || 'Not set'}
 ${notes.length > 0 ? `\nATTORNEY NOTES:\n${notes.map(n => `- ${n.content}`).join('\n')}` : ''}
 
-Be concise, specific to THIS case, and help the attorney with analysis, drafting, research, and strategy.`;
+Be concise, specific to THIS case, and help the attorney with analysis, drafting, research, and strategy.${changesSummary}`;
     }
 
     try {
