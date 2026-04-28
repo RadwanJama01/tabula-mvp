@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { confirmAction } from '../../lib/confirm.js';
+import { personLabelLower } from '../../lib/terminology.js';
 
 /**
  * AI Case Assistant — slide-out panel with Claude-powered contextual chat.
@@ -147,7 +148,7 @@ export default function AIAssistant({ caseId, practiceType, isOpen, onClose }) {
         ) : messages.length === 0 ? (
           <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: '0.85rem', color: 'var(--warm-gray)', marginBottom: 16 }}>
-              Ask me anything about this case. I have full context on the debtor, financials, creditors, and documents.
+              Ask me anything about this case. I have full context on the {personLabelLower(practiceType)}, financials, and documents.
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {suggestions.map((s, i) => (

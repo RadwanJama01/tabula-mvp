@@ -8,6 +8,7 @@ import AIAssistant from '../components/case/AIAssistant.jsx';
 import { AccidentDetailsTab, MedicalRecordsTab, CaseValuationTab, SettlementTab, PIDeadlinesTab } from '../components/case/PIWorkflow.jsx';
 import { useToast } from '../lib/toast.jsx';
 import { confirmAction } from '../lib/confirm.js';
+import { personLabel } from '../lib/terminology.js';
 
 const STATUS_LABELS = {
   intake: 'Intake',
@@ -380,7 +381,7 @@ function OverviewTab({ caseData, debtor, caseId, onRefresh, onJumpTo }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
         <div className="card">
           <div className="card-header">
-            <span className="card-title">{isPI ? 'Client Information' : 'Debtor Information'}</span>
+            <span className="card-title">{personLabel(caseData.practice_type)} Information</span>
             {!editingInfo && (
               <button className="btn btn-sm btn-secondary" onClick={() => setEditingInfo(true)}>Edit</button>
             )}
@@ -1468,7 +1469,7 @@ function ReviewTab({ caseData, caseId, onRefresh }) {
               <label className="form-label">Section</label>
               <select className="form-select" value={section} onChange={(e) => setSection(e.target.value)}>
                 <option value="general">General</option>
-                <option value="debtor_info">Debtor Information</option>
+                <option value="debtor_info">{personLabel(caseData.practice_type)} Information</option>
                 <option value="income">Income</option>
                 <option value="expenses">Expenses</option>
                 <option value="creditors">Creditors</option>

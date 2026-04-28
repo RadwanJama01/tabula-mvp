@@ -172,7 +172,7 @@ export default function Dashboard({ navigate, initialFilter }) {
           <table>
             <thead>
               <tr>
-                <th>Debtor</th>
+                <th>Name</th>
                 <th>Chapter</th>
                 <th>District</th>
                 <th>Status</th>

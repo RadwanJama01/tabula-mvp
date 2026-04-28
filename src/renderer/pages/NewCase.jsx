@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useToast } from '../lib/toast.jsx';
+import { personLabel, personLabelLower } from '../lib/terminology.js';
 
 const DISTRICTS = [
   'N.D. Alabama', 'M.D. Alabama', 'S.D. Alabama', 'D. Alaska', 'D. Arizona',
@@ -112,10 +113,12 @@ export default function NewCase({ navigate }) {
         <div>
           <h1 className="page-title">New Case</h1>
           <p className="page-subtitle">
-            {form.practiceType === 'bankruptcy' ? 'Enter debtor information to create a new bankruptcy case' :
-             form.practiceType === 'personal_injury' ? 'Enter client and accident information to open a new PI case' :
-             form.practiceType === 'estate_administration' ? 'Enter decedent and fiduciary information to open an estate case' :
-             'Enter client information to create a new case'}
+            Enter {personLabelLower(form.practiceType)} information to create a new {
+              form.practiceType === 'bankruptcy' ? 'bankruptcy case' :
+              form.practiceType === 'personal_injury' ? 'personal injury case' :
+              form.practiceType === 'estate_administration' ? 'estate case' :
+              'case'
+            }
           </p>
         </div>
         <button className="btn btn-ghost" onClick={() => navigate('/')}>
@@ -182,7 +185,7 @@ export default function NewCase({ navigate }) {
 
         <div className="card" style={{ marginBottom: 24 }}>
           <div className="card-header">
-            <span className="card-title">{form.practiceType === 'bankruptcy' ? 'Debtor' : 'Client'} Information</span>
+            <span className="card-title">{personLabel(form.practiceType)} Information</span>
           </div>
           <div className="card-body">
             <div className="form-row">
@@ -255,7 +258,7 @@ export default function NewCase({ navigate }) {
                   className="form-input"
                   type="email"
                   name="email"
-                  placeholder="debtor@email.com"
+                  placeholder={`${personLabelLower(form.practiceType)}@email.com`}
                   value={form.email}
                   onChange={(e) => update('email', e.target.value)}
                   aria-invalid={!!errors.email}
